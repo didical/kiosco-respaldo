@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Escaneo de respaldo · Kiosco GC</title>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.20.0/umd/index.min.js"></script>
+<style>
+  :root {
+    --bg: #14171a;
+    --panel: #1d2126;
+    --border: #2c3138;
+    --text: #eceae4;
+    --text-dim: #8c939c;
+    --accent: #d98a2b;
+    --accent-text: #14171a;
+    --ok: #4f9d6e;
+    --err: #c9564f;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f4f2ee;
+      --panel: #ffffff;
+      --border: #e0ddd6;
+      --text: #1c1c1a;
+      --text-dim: #6b6a64;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+  }
+  header { padding: 22px 20px 6px; }
+  header h1 { font-size: 17px; font-weight: 600; margin: 0; }
+  header p { margin: 4px 0 0; font-size: 13px; color: var(--text-dim); line-height: 1.4; }
+  main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 14px 20px 28px;
+    gap: 14px;
+    max-width: 460px;
+    width: 100%;
+    margin: 0 auto;
+  }
+  label { font-size: 13px; color: var(--text-dim); display: block; margin-bottom: 6px; }
+  input[type="url"] {
+    width: 100%;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 15px;
+    color: var(--text);
+  }
+  input[type="url"]:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .stage {
+    position: relative;
+    background: #000;
+    border-radius: 14px;
+    overflow: hidden;
+    aspect-ratio: 3 / 4;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .stage video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .stage.idle { background: var(--panel); border: 1px dashed var(--border); }
+  .viewfinder {
+    position: absolute; inset: 20% 12%;
+    border: 2px solid var(--accent); border-radius: 10px;
+    pointer-events: none;
+  }
+  .idle-msg { color: var(--text-dim); font-size: 14px; text-align: center; padding: 0 30px; }
+  button {
+    font: inherit; border: none; border-radius: 12px; padding: 15px;
+    font-size: 16px; font-weight: 600; cursor: pointer;
+  }
+  .btn-primary { background: var(--accent); color: var(--accent-text); }
+  .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-secondary { background: transparent; color: var(--text-dim); border: 1px solid var(--border); }
+  .result { border-radius: 12px; padding: 16px; font-size: 15px; display: none; background: var(--panel); border: 1px solid var(--border); }
+  .result.show { display: block; }
+  .result .code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 20px; font-weight: 700; margin-bottom: 6px; word-break: break-all;
+  }
+  .result.ok { background: rgba(79,157,110,0.14); border-color: var(--ok); }
+  .result.err { background: rgba(201,86,79,0.14); border-color: var(--err); }
+  .status-line { font-size: 13px; color: var(--text-dim); }
+  .result.ok .status-line { color: var(--ok); }
+  .result.err .status-line { color: var(--err); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Escaneo de respaldo</h1>
+  <p>Para cuando el lector del kiosco falla, se descarga o pierde conexión. Escanea con la cámara y se envía directo al webhook de abajo.</p>
+</header>
+<main>
+  <div>
+    <label for="url">Webhook de destino</label>
+    <input id="url" type="url" inputmode="url" placeholder="https://..." autocomplete="off" autocapitalize="off" spellcheck="false" />
+  </div>
+
+  <div id="stage" class="stage idle">
+    <div class="idle-msg">La cámara aparece aquí al escanear</div>
+  </div>
+
+  <div id="result" class="result"></div>
+
+  <button id="scanBtn" class="btn-primary">Escanear</button>
+  <button id="cancelBtn" class="btn-secondary" style="display:none">Cancelar</button>
+  <button id="againBtn" class="btn-secondary" style="display:none">Escanear otro</button>
+</main>
+
+<script>
+(function () {
+  var urlInput = document.getElementById('url');
+  var stage = document.getElementById('stage');
+  var resultEl = document.getElementById('result');
+  var scanBtn = document.getElementById('scanBtn');
+  var cancelBtn = document.getElementById('cancelBtn');
+  var againBtn = document.getElementById('againBtn');
+
+  var STORAGE_KEY = 'kiosco-gc-escaneo-webhook-url';
+  try {
+    var saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) urlInput.value = saved;
+  } catch (e) {}
+
+  urlInput.addEventListener('change', function () {
+    try { localStorage.setItem(STORAGE_KEY, urlInput.value.trim()); } catch (e) {}
+  });
+
+  var reader = null;
+  var videoEl = null;
+
+  function setStageIdle(msg) {
+    stage.classList.add('idle');
+    stage.innerHTML = '<div class="idle-msg">' + msg + '</div>';
+  }
+
+  function setStageLive() {
+    stage.classList.remove('idle');
+    stage.innerHTML = '';
+    videoEl = document.createElement('video');
+    videoEl.setAttribute('playsinline', '');
+    videoEl.setAttribute('autoplay', '');
+    videoEl.setAttribute('muted', '');
+    stage.appendChild(videoEl);
+    var vf = document.createElement('div');
+    vf.className = 'viewfinder';
+    stage.appendChild(vf);
+  }
+
+  function showResult(state, codeText, statusText) {
+    resultEl.className = 'result show ' + state;
+    resultEl.innerHTML = (codeText ? '<div class="code">' + codeText + '</div>' : '') +
+      '<div class="status-line">' + statusText + '</div>';
+  }
+
+  function stopReader() {
+    if (reader) {
+      try { reader.reset(); } catch (e) {}
+      reader = null;
+    }
+  }
+
+  async function sendCode(code) {
+    var url = urlInput.value.trim();
+    showResult('pending', code, 'Enviando...');
+    try {
+      var resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ codigo: code, origen: 'escaneo-respaldo', ts: new Date().toISOString(), clave: 'gc-respaldo-2026' })
+      });
+      if (resp.ok) {
+        showResult('ok', code, 'Enviado (HTTP ' + resp.status + ')');
+      } else {
+        showResult('err', code, 'El servidor respondió con error (HTTP ' + resp.status + ')');
+      }
+    } catch (e) {
+      showResult('err', code, 'No se pudo enviar: ' + (e && e.message ? e.message : 'error de red'));
+    }
+  }
+
+  async function pickRearDeviceId() {
+    var tmpStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } });
+    var track = tmpStream.getVideoTracks()[0];
+    var deviceId = track.getSettings ? track.getSettings().deviceId : undefined;
+    tmpStream.getTracks().forEach(function (t) { t.stop(); });
+    return deviceId;
+  }
+
+  async function startScan() {
+    var url = urlInput.value.trim();
+    if (!url) { urlInput.focus(); return; }
+
+    resultEl.classList.remove('show');
+    setStageLive();
+    scanBtn.style.display = 'none';
+    cancelBtn.style.display = '';
+    againBtn.style.display = 'none';
+
+    try {
+      var deviceId = await pickRearDeviceId();
+
+      var hints = new Map();
+      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+        ZXing.BarcodeFormat.CODE_39,
+        ZXing.BarcodeFormat.CODE_128,
+        ZXing.BarcodeFormat.EAN_13,
+        ZXing.BarcodeFormat.EAN_8,
+        ZXing.BarcodeFormat.QR_CODE
+      ]);
+
+      reader = new ZXing.BrowserMultiFormatReader(hints);
+      reader.decodeFromVideoDevice(deviceId, videoEl, function (result) {
+        if (result) {
+          var text = result.getText();
+          stopReader();
+          setStageIdle('Listo para el siguiente escaneo');
+          cancelBtn.style.display = 'none';
+          againBtn.style.display = '';
+          sendCode(text);
+        }
+        // los errores "no encontrado" llegan en cada cuadro sin codigo: se ignoran a proposito
+      });
+    } catch (e) {
+      setStageIdle('No se pudo abrir la cámara: ' + (e && e.message ? e.message : e));
+      scanBtn.style.display = '';
+      cancelBtn.style.display = 'none';
+    }
+  }
+
+  scanBtn.addEventListener('click', startScan);
+  cancelBtn.addEventListener('click', function () {
+    stopReader();
+    setStageIdle('La cámara aparece aquí al escanear');
+    scanBtn.style.display = '';
+    cancelBtn.style.display = 'none';
+  });
+  againBtn.addEventListener('click', function () {
+    resultEl.classList.remove('show');
+    againBtn.style.display = 'none';
+    scanBtn.style.display = '';
+  });
+})();
+</script>
+</body>
+</html>
