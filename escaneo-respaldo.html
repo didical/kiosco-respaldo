@@ -115,6 +115,11 @@
     <input id="url" type="url" inputmode="url" placeholder="https://..." autocomplete="off" autocapitalize="off" spellcheck="false" />
   </div>
 
+  <div>
+    <label for="clave">Clave de acceso</label>
+    <input id="clave" type="password" placeholder="Clave del webhook" autocomplete="off" autocapitalize="off" spellcheck="false" />
+  </div>
+
   <div id="stage" class="stage idle">
     <div class="idle-msg">La cámara aparece aquí al escanear</div>
   </div>
@@ -129,6 +134,7 @@
 <script>
 (function () {
   var urlInput = document.getElementById('url');
+  var claveInput = document.getElementById('clave');
   var stage = document.getElementById('stage');
   var resultEl = document.getElementById('result');
   var scanBtn = document.getElementById('scanBtn');
@@ -136,13 +142,20 @@
   var againBtn = document.getElementById('againBtn');
 
   var STORAGE_KEY = 'kiosco-gc-escaneo-webhook-url';
+  var STORAGE_KEY_CLAVE = 'kiosco-gc-escaneo-webhook-clave';
   try {
     var saved = localStorage.getItem(STORAGE_KEY);
     if (saved) urlInput.value = saved;
+    var savedClave = localStorage.getItem(STORAGE_KEY_CLAVE);
+    if (savedClave) claveInput.value = savedClave;
   } catch (e) {}
 
   urlInput.addEventListener('change', function () {
     try { localStorage.setItem(STORAGE_KEY, urlInput.value.trim()); } catch (e) {}
+  });
+
+  claveInput.addEventListener('change', function () {
+    try { localStorage.setItem(STORAGE_KEY_CLAVE, claveInput.value.trim()); } catch (e) {}
   });
 
   var reader = null;
@@ -186,7 +199,7 @@
       var resp = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ codigo: code, origen: 'escaneo-respaldo', ts: new Date().toISOString(), clave: 'gc-respaldo-2026' })
+        body: JSON.stringify({ codigo: code, origen: 'escaneo-respaldo', ts: new Date().toISOString(), clave: claveInput.value.trim() })
       });
       if (resp.ok) {
         showResult('ok', code, 'Enviado (HTTP ' + resp.status + ')');
